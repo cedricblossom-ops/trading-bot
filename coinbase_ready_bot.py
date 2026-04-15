@@ -1,4 +1,4 @@
-from __future__ import annotations
+=from __future__ import annotations
 
 import json
 import logging
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from coinbase.rest import RESTClient
 from coinbase import jwt_generator
 
-PUBLIC_CANDLES_URL = "https://api.coinbase.com/api/v3/brokerage/products/{product_id}/candles"
+PUBLIC_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
 STATE_FILE = "coinbase_bot_state.json"
 LOG_FILE = "coinbase_ready_bot.log"
 
@@ -117,17 +117,13 @@ def def get_public_candles(client: RESTClient, product_id: str, granularity: str
 
     url = PUBLIC_CANDLES_URL.format(product_id=product_id)
     params = {
-        "start": iso_utc(start),
-        "end": iso_utc(end),
-        "granularity": granularity,
-        "limit": limit,
-    }
+    "start": iso_utc(start),
+    "end": iso_utc(end),
+    "granularity": 300
+}
 
-    headers = {
-        "Authorization": f"Bearer {jwt_token}"
-    }
-
-    r = requests.get(url, params=params, headers=headers, timeout=20)
+    
+    r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     payload = r.json()
 
