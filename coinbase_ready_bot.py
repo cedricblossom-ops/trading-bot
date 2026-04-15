@@ -14,7 +14,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 from coinbase.rest import RESTClient
-
+from coinbase import jwt_generator
 
 PUBLIC_CANDLES_URL = "https://api.coinbase.com/api/v3/brokerage/products/{product_id}/candles"
 STATE_FILE = "coinbase_bot_state.json"
@@ -105,7 +105,42 @@ def iso_utc(dt: datetime) -> str:
     return str(int(dt.timestamp()))
 
 
-def get_public_candles(product_id: str, granularity: str, limit: int) -> pd.DataFrame:
+def def get_public_candles(client: RESTClient, product_id: str, granularity: str, limit: int) -> pd.DataFrame:
+    end = utc_now()
+    start = end - timedelta(days=3)
+
+    jwt_uri = jwt_generator.format_jwt_uri(
+        "GET",
+        f"/api/v3/brokerage/products/{product_id}/candles",
+    )
+    jwt_token = jwt_generator.build_rest_jwt(jwt_uri, client.api_key, client.api_secret)
+
+    url = PUBLIC_CANDLES_URL.format(product_id=product_id)
+    params = {
+        "start": iso_utc(start),
+        "end": iso_utc(end),
+        "granularity": granularity,
+        "limit": limit,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}"
+    }
+
+    r = requests.get(url, params=params, headers=headers, timeout=20)
+    r.raise_for_status()
+    payload = r.json()
+
+    candles = payload.get("candles", [])
+    if not candles:
+        raise ValueError(f"No candles returned for {product_id}")
+
+    df = pd.DataFrame(candles)
+    for col in ["start", "low", "high", "open", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["time"] = pd.to_datetime(df["start"], unit="s", utc=True)
+    df = df.sort_values("time").reset_index(drop=True)
+    return df
     end = utc_now()
     start = end - timedelta(days=3)
 
@@ -227,7 +262,7 @@ def main() -> None:
 
     while True:
         try:
-            df = get_public_candles(cfg.product_id, cfg.granularity, cfg.candle_limit)
+            df = get_public_candles(client, cfg.product_id, cfg.granularity, cfg.candle_limit)
             df = add_indicators(df, cfg.fast_ema, cfg.slow_ema)
             cross, current_price = latest_signal(df)
 
