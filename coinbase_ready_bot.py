@@ -146,11 +146,10 @@ def def get_public_candles(client: RESTClient, product_id: str, granularity: str
 
     url = PUBLIC_CANDLES_URL.format(product_id=product_id)
     params = {
-        "start": iso_utc(start),
-        "end": iso_utc(end),
-        "granularity": granularity,
-        "limit": limit,
-    }
+    "start": int(start.timestamp()),
+    "end": int(end.timestamp()),
+    "granularity": granularity,
+}
 
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
