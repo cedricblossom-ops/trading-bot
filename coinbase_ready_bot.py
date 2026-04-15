@@ -1,4 +1,4 @@
-=from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -14,7 +14,6 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 from coinbase.rest import RESTClient
-from coinbase import jwt_generator
 
 PUBLIC_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
 STATE_FILE = "coinbase_bot_state.json"
@@ -29,8 +28,8 @@ class Config:
     quote_currency: str = "USD"
     base_currency: str = "BTC"
     dry_run: bool = True
-    granularity: str = "FIVE_MINUTE"
-    candle_limit: int = 300
+    granularity_seconds: int = 300
+    candle_span_seconds: int = 300 * 300
     fast_ema: int = 9
     slow_ema: int = 21
     max_position_fraction: float = 0.10
@@ -52,30 +51,31 @@ def setup_logging() -> None:
     )
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def load_config() -> Config:
     load_dotenv()
 
     api_key = os.getenv("COINBASE_API_KEY", "").strip()
     api_secret = os.getenv("COINBASE_API_SECRET", "").strip()
-
-    if not api_key or not api_secret:
-        raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET in environment variables")
-
     product_id = os.getenv("PRODUCT_ID", "BTC-USD").strip().upper()
     dry_run = os.getenv("DRY_RUN", "true").strip().lower() == "true"
+
+    if not api_key or not api_secret:
+        raise ValueError("Missing COINBASE_API_KEY or COINBASE_API_SECRET")
 
     parts = product_id.split("-")
     if len(parts) != 2:
         raise ValueError("PRODUCT_ID must look like BTC-USD")
 
-    base_currency, quote_currency = parts[0], parts[1]
-
     return Config(
         api_key=api_key,
         api_secret=api_secret,
         product_id=product_id,
-        quote_currency=quote_currency,
-        base_currency=base_currency,
+        base_currency=parts[0],
+        quote_currency=parts[1],
         dry_run=dry_run,
     )
 
@@ -97,68 +97,30 @@ def decimal_str(value: float, places: int) -> str:
     return str(Decimal(str(value)).quantize(Decimal(pattern), rounding=ROUND_DOWN))
 
 
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def iso_utc(dt: datetime) -> str:
-    return str(int(dt.timestamp()))
-
-
-def def get_public_candles(client: RESTClient, product_id: str, granularity: str, limit: int) -> pd.DataFrame:
+def get_public_candles(product_id: str, granularity_seconds: int, candle_span_seconds: int) -> pd.DataFrame:
     end = utc_now()
-    start = end - timedelta(days=3)
-
-    jwt_uri = jwt_generator.format_jwt_uri(
-        "GET",
-        f"/api/v3/brokerage/products/{product_id}/candles",
-    )
-    jwt_token = jwt_generator.build_rest_jwt(jwt_uri, client.api_key, client.api_secret)
+    start = end - timedelta(seconds=candle_span_seconds)
 
     url = PUBLIC_CANDLES_URL.format(product_id=product_id)
     params = {
-    "start": iso_utc(start),
-    "end": iso_utc(end),
-    "granularity": 300
-}
-
-    
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    payload = r.json()
-
-    candles = payload.get("candles", [])
-    if not candles:
-        raise ValueError(f"No candles returned for {product_id}")
-
-    df = pd.DataFrame(candles)
-    for col in ["start", "low", "high", "open", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["time"] = pd.to_datetime(df["start"], unit="s", utc=True)
-    df = df.sort_values("time").reset_index(drop=True)
-    return df
-    end = utc_now()
-    start = end - timedelta(days=3)
-
-    url = PUBLIC_CANDLES_URL.format(product_id=product_id)
-    params = {
-    "start": int(start.timestamp()),
-    "end": int(end.timestamp()),
-    "granularity": granularity,
-}
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "granularity": granularity_seconds,
+    }
 
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
+
     payload = r.json()
+    if not payload:
+        raise ValueError(f"No candle data returned for {product_id}")
 
-    candles = payload.get("candles", [])
-    if not candles:
-        raise ValueError(f"No candles returned for {product_id}")
+    df = pd.DataFrame(payload, columns=["time", "low", "high", "open", "close", "volume"])
+    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
 
-    df = pd.DataFrame(candles)
-    for col in ["start", "low", "high", "open", "close", "volume"]:
+    for col in ["low", "high", "open", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["time"] = pd.to_datetime(df["start"], unit="s", utc=True)
+
     df = df.sort_values("time").reset_index(drop=True)
     return df
 
@@ -185,10 +147,7 @@ def get_available_balances(client: RESTClient) -> dict[str, float]:
     if isinstance(response, dict):
         accounts = response.get("accounts", [])
     else:
-        try:
-            accounts = response.accounts
-        except AttributeError:
-            accounts = []
+        accounts = getattr(response, "accounts", [])
 
     for acct in accounts:
         if isinstance(acct, dict):
@@ -257,7 +216,7 @@ def main() -> None:
 
     while True:
         try:
-            df = get_public_candles(client, cfg.product_id, cfg.granularity, cfg.candle_limit)
+            df = get_public_candles(cfg.product_id, cfg.granularity_seconds, cfg.candle_span_seconds)
             df = add_indicators(df, cfg.fast_ema, cfg.slow_ema)
             cross, current_price = latest_signal(df)
 
