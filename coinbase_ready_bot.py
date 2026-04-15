@@ -15,7 +15,7 @@ import requests
 from dotenv import load_dotenv
 from coinbase.rest import RESTClient
 
-PUBLIC_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product_id}/candles"
+PUBLIC_CANDLES_URL = "https://api.exchange.coinbase.com/products"
 STATE_FILE = "coinbase_bot_state.json"
 LOG_FILE = "coinbase_ready_bot.log"
 
