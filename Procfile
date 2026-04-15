@@ -1,1 +1,1 @@
-worker: python coinbase_ready_bot.py
+worker: python coinbase_fresh_bot.py
