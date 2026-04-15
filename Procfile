@@ -1,0 +1,1 @@
+worker: python coinbase_ready_bot.py
