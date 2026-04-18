@@ -86,16 +86,23 @@ def buy(current_price):
             quote_size=str(TRADE_SIZE_USD),
         )
 
-        if order.get("success"):
-            logging.info("LIVE BUY | %s", order)
-            # Approximate holdings for local tracking using current price
+        logging.info("LIVE BUY RESPONSE | %s", order)
+
+        success = getattr(order, "success", False)
+
+        if success:
             btc_bought = TRADE_SIZE_USD / current_price
             btc_holdings += btc_bought
             last_buy_price = current_price
             trade_count_today += 1
             last_trade_ts = time.time()
+            logging.info(
+                "LIVE BUY | Price: $%.2f | Estimated BTC bought: %.6f | BTC holdings: %.6f | Trades today: %d",
+                current_price, btc_bought, btc_holdings, trade_count_today
+            )
         else:
             logging.error("LIVE BUY FAILED | %s", order)
+
         return
 
     if cash < TRADE_SIZE_USD:
@@ -133,14 +140,22 @@ def sell(current_price, reason):
             base_size=str(round(btc_holdings, 8)),
         )
 
-        if order.get("success"):
+        logging.info("LIVE SELL RESPONSE | %s", order)
+
+        success = getattr(order, "success", False)
+
+        if success:
             realized_pnl_today += pnl
-            logging.info("LIVE SELL | Reason: %s | %s", reason, order)
             btc_holdings = 0.0
             last_buy_price = None
             last_trade_ts = time.time()
+            logging.info(
+                "LIVE SELL | Reason: %s | Price: $%.2f | Estimated PnL: $%.2f | Daily realized PnL: $%.2f",
+                reason, current_price, pnl, realized_pnl_today
+            )
         else:
             logging.error("LIVE SELL FAILED | %s", order)
+
         return
 
     cash += usd_received
@@ -163,6 +178,8 @@ def main():
     logging.info("Trade size: $%.2f", TRADE_SIZE_USD)
     logging.info("Daily loss limit: $%.2f", MAX_DAILY_LOSS_USD)
     logging.info("Max trades/day: %d", MAX_TRADES_PER_DAY)
+    logging.info("Sell gain pct: %.4f", SELL_GAIN_PCT)
+    logging.info("Stop loss pct: %.4f", STOP_LOSS_PCT)
 
     first_buy_done = False
 
@@ -181,6 +198,7 @@ def main():
 
                 if gain_pct >= SELL_GAIN_PCT:
                     sell(price, "target hit")
+
                 elif loss_pct >= STOP_LOSS_PCT:
                     sell(price, "stop loss")
 
