@@ -3,20 +3,19 @@ import logging
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logging.info("NEW VERSION update bot logic")
+
 PRODUCT_ID = "BTC-USD"
 
 STARTING_CASH = 1000.0
 TRADE_SIZE_USD = 100.0
 
-BUY_DROP_PCT = 0.0003
 SELL_GAIN_PCT = 0.0005
 STOP_LOSS_PCT = 0.0005
 
 cash = STARTING_CASH
 btc_holdings = 0.0
 last_buy_price = None
-reference_price = None
+trade_count = 0
 
 
 def get_price():
@@ -32,42 +31,28 @@ def portfolio_value(current_price):
 
 
 def buy(current_price):
-    global cash, btc_holdings, last_buy_price
+    global cash, btc_holdings, last_buy_price, trade_count
 
     if cash < TRADE_SIZE_USD:
-        logging.info("Not enough cash to buy. Cash: $%.2f", cash)
+        logging.info("SIM BUY SKIPPED | Not enough cash | Cash: $%.2f", cash)
         return
 
     btc_bought = TRADE_SIZE_USD / current_price
     cash -= TRADE_SIZE_USD
     btc_holdings += btc_bought
     last_buy_price = current_price
+    trade_count += 1
 
     logging.info(
-    "SIM BUY | Price: $%.2f | BTC bought: %.6f | Cash left: $%.2f | BTC holdings: %.6f",
-    current_price, btc_bought, cash, btc_holdings
+        "SIM BUY | Price: $%.2f | BTC bought: %.6f | Cash left: $%.2f | BTC holdings: %.6f | Trades: %d",
+        current_price, btc_bought, cash, btc_holdings, trade_count
     )
+
 
 def sell(current_price, reason):
     global cash, btc_holdings, last_buy_price
 
-if btc_holdings == 0:
-logging.info("TRYING TO BUY")
-buy(price)
-
-    # FORCE FIRST BUY (for testing)
-    if last_buy_price is None:
-        buy(price)
-        reference_price = price
-    else:
-        drop_from_reference = (reference_price - price) / reference_price
-
-        if drop_from_reference >= BUY_DROP_PCT:
-            buy(price)
-            reference_price = price
-        else:
-            if price > reference_price:
-                reference_price = price
+    if btc_holdings <= 0:
         return
 
     usd_received = btc_holdings * current_price
@@ -75,66 +60,54 @@ buy(price)
     if last_buy_price is not None:
         pnl = (current_price - last_buy_price) * btc_holdings
 
+    cash += usd_received
+
     logging.info(
-    "SIM SELL | Reason: %s | Price: $%.2f | USD received: $%.2f | Cash: $%.2f",
-    reason, current_price, usd_received, cash
+        "SIM SELL | Reason: %s | Price: $%.2f | USD received: $%.2f | PnL: $%.2f | Cash: $%.2f",
+        reason, current_price, usd_received, pnl, cash
     )
 
-    cash += usd_received
     btc_holdings = 0.0
     last_buy_price = None
 
 
 def main():
-    global reference_price
-
+    logging.info("NEW CLEAN VERSION RUNNING")
     logging.info("Bot started")
     logging.info("Tracking %s", PRODUCT_ID)
     logging.info("Simulation mode ON")
     logging.info("Starting cash: $%.2f", cash)
 
+    first_buy_done = False
+
     while True:
         try:
             price = get_price()
-            
-            if btc_holdings == 0 and last_buy_price is None:
+
+            if not first_buy_done and btc_holdings == 0.0:
+                logging.info("FORCING FIRST BUY")
                 buy(price)
-                
-            if reference_price is None:
-                reference_price = price
+                first_buy_done = True
+
+            elif btc_holdings > 0 and last_buy_price is not None:
+                gain_pct = (price - last_buy_price) / last_buy_price
+                loss_pct = (last_buy_price - price) / last_buy_price
+
+                if gain_pct >= SELL_GAIN_PCT:
+                    sell(price, "target hit")
+
+                elif loss_pct >= STOP_LOSS_PCT:
+                    sell(price, "stop loss")
 
             logging.info(
                 "BTC Price: $%.2f | Cash: $%.2f | BTC: %.6f | Portfolio: $%.2f",
                 price, cash, btc_holdings, portfolio_value(price)
             )
 
-            if btc_holdings == 0:
-                drop_from_reference = (reference_price - price) / reference_price
-
-                if drop_from_reference >= BUY_DROP_PCT:
-                    buy(price)
-                    reference_price = price
-                else:
-                    if price > reference_price:
-                        reference_price = price
-
-            else:
-                gain_from_buy = (price - last_buy_price) / last_buy_price
-                loss_from_buy = (last_buy_price - price) / last_buy_price
-
-                if gain_from_buy >= SELL_GAIN_PCT:
-                    sell(price, "target hit")
-                    reference_price = price
-
-                elif loss_from_buy >= STOP_LOSS_PCT:
-                    sell(price, "stop loss")
-                    reference_price = price
-
-            time.sleep(10)
-
         except Exception as e:
             logging.exception("Loop error: %s", e)
-            time.sleep(10)
+
+        time.sleep(10)
 
 
 if __name__ == "__main__":
