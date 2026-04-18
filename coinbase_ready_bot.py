@@ -3,7 +3,7 @@ import logging
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logging.info("NEW VERSION RUNNING")
+logging.info("NEW VERSION update bot logic")
 PRODUCT_ID = "BTC-USD"
 
 STARTING_CASH = 1000.0
