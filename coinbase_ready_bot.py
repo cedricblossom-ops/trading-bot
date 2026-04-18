@@ -52,6 +52,8 @@ def sell(current_price, reason):
     global cash, btc_holdings, last_buy_price
 
 if btc_holdings == 0:
+logging.info("TRYING TO BUY")
+buy(price)
 
     # FORCE FIRST BUY (for testing)
     if last_buy_price is None:
