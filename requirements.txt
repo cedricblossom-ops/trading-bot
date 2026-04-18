@@ -1,4 +1,1 @@
-coinbase-advanced-py
-pandas
-python-dotenv
 requests
