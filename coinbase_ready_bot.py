@@ -44,10 +44,9 @@ def buy(current_price):
     last_buy_price = current_price
 
     logging.info(
-        "SIM BUY | Price: $%.2f | Bought: %.6f BTC | Cash left: $%.2f | BTC holdings: %.6f",
-        current_price, btc_bought, cash, btc_holdings
+    "SIM BUY | Price: $%.2f | BTC bought: %.6f | Cash left: $%.2f | BTC holdings: %.6f",
+    current_price, btc_bought, cash, btc_holdings
     )
-
 
 def sell(current_price, reason):
     global cash, btc_holdings, last_buy_price
@@ -75,8 +74,8 @@ if btc_holdings == 0:
         pnl = (current_price - last_buy_price) * btc_holdings
 
     logging.info(
-        "SIM SELL | Reason: %s | Price: $%.2f | Sold: %.6f BTC | USD received: $%.2f | Trade PnL: $%.2f",
-        reason, current_price, btc_holdings, usd_received, pnl
+    "SIM SELL | Reason: %s | Price: $%.2f | USD received: $%.2f | Cash: $%.2f",
+    reason, current_price, usd_received, cash
     )
 
     cash += usd_received
