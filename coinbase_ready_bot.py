@@ -52,7 +52,21 @@ def buy(current_price):
 def sell(current_price, reason):
     global cash, btc_holdings, last_buy_price
 
-    if btc_holdings <= 0:
+if btc_holdings == 0:
+
+    # FORCE FIRST BUY (for testing)
+    if last_buy_price is None:
+        buy(price)
+        reference_price = price
+    else:
+        drop_from_reference = (reference_price - price) / reference_price
+
+        if drop_from_reference >= BUY_DROP_PCT:
+            buy(price)
+            reference_price = price
+        else:
+            if price > reference_price:
+                reference_price = price
         return
 
     usd_received = btc_holdings * current_price
