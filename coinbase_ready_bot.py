@@ -94,8 +94,10 @@ def main():
     while True:
         try:
             price = get_price()
-if btc_holdings == 0 and last_buy_price is None:
-    buy(price)
+            
+            if btc_holdings == 0 and last_buy_price is None:
+                buy(price)
+                
             if reference_price is None:
                 reference_price = price
 
