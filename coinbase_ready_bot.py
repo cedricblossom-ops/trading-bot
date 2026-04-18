@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 
 from coinbase.rest import RESTClient
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
 PRODUCT_ID = os.getenv("PRODUCT_ID", "BTC-USD")
 
@@ -23,10 +26,11 @@ STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.002"))
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY", "")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET", "")
 
-# Local fallback values for SIM mode only
+# SIM-only tracking
 sim_cash = 1000.0
 sim_btc_holdings = 0.0
 
+# Strategy state
 last_buy_price = None
 trade_count_today = 0
 realized_pnl_today = 0.0
@@ -41,12 +45,19 @@ if LIVE_TRADING:
 
 
 def normalize_response(resp):
+    """
+    Coinbase SDK may return typed objects instead of plain dicts.
+    Convert to dict when possible.
+    """
     if hasattr(resp, "to_dict"):
         return resp.to_dict()
     return resp
 
 
 def get_price():
+    """
+    Public spot price from Coinbase Exchange public endpoint.
+    """
     url = f"https://api.exchange.coinbase.com/products/{PRODUCT_ID}/ticker"
     response = requests.get(url, timeout=15)
     response.raise_for_status()
@@ -56,6 +67,7 @@ def get_price():
 
 def reset_daily_counters_if_needed():
     global current_day, trade_count_today, realized_pnl_today
+
     today = datetime.now(timezone.utc).date()
     if today != current_day:
         current_day = today
@@ -69,10 +81,15 @@ def cooldown_active():
 
 
 def parse_available_balance(balance_obj):
+    """
+    available_balance often comes back like:
+    {"value": "12.34", "currency": "USD"}
+    """
     if isinstance(balance_obj, dict):
-        if "value" in balance_obj:
+        value = balance_obj.get("value")
+        if value is not None:
             try:
-                return float(balance_obj["value"])
+                return float(value)
             except Exception:
                 return 0.0
     try:
@@ -82,13 +99,21 @@ def parse_available_balance(balance_obj):
 
 
 def get_live_balances():
+    """
+    Returns real available balances from Coinbase.
+    """
+    if client is None:
+        return 0.0, 0.0
+
     accounts_resp = client.get_accounts()
     accounts_data = normalize_response(accounts_resp)
 
     usd_available = 0.0
     btc_available = 0.0
 
-    accounts = accounts_data.get("accounts", []) if isinstance(accounts_data, dict) else []
+    accounts = []
+    if isinstance(accounts_data, dict):
+        accounts = accounts_data.get("accounts", [])
 
     for acct in accounts:
         currency = acct.get("currency")
@@ -106,11 +131,13 @@ def portfolio_value(current_price):
     if LIVE_TRADING:
         usd_available, btc_available = get_live_balances()
         return usd_available + (btc_available * current_price)
+
     return sim_cash + (sim_btc_holdings * current_price)
 
 
 def buy(current_price):
-    global sim_cash, sim_btc_holdings, last_buy_price, trade_count_today, last_trade_ts
+    global sim_cash, sim_btc_holdings
+    global last_buy_price, trade_count_today, last_trade_ts
 
     if cooldown_active():
         logging.info("BUY BLOCKED | Cooldown active")
@@ -125,6 +152,14 @@ def buy(current_price):
         return
 
     if LIVE_TRADING:
+        usd_available, _ = get_live_balances()
+        if usd_available < TRADE_SIZE_USD:
+            logging.info(
+                "LIVE BUY BLOCKED | Available USD too low | USD available: $%.2f | Needed: $%.2f",
+                usd_available, TRADE_SIZE_USD
+            )
+            return
+
         order = client.market_order_buy(
             client_order_id=str(uuid.uuid4()),
             product_id=PRODUCT_ID,
@@ -134,22 +169,29 @@ def buy(current_price):
         order_data = normalize_response(order)
         logging.info("LIVE BUY RESPONSE | %s", order_data)
 
-        if order_data["success"]:
+        success = False
+        if isinstance(order_data, dict):
+            success = bool(order_data.get("success"))
+
+        if success:
             last_buy_price = current_price
             trade_count_today += 1
             last_trade_ts = time.time()
 
-            usd_available, btc_available = get_live_balances()
+            usd_after, btc_after = get_live_balances()
             logging.info(
-                "LIVE BUY | Price: $%.2f | USD available: $%.2f | BTC available: %.6f | Trades today: %d",
-                current_price, usd_available, btc_available, trade_count_today
+                "LIVE BUY | Price: $%.2f | USD available: $%.2f | BTC available: %.8f | Trades today: %d",
+                current_price, usd_after, btc_after, trade_count_today
             )
         else:
-            logging.error("LIVE BUY FAILED | %s", order_data["error_response"])
+            error_info = order_data.get("error_response", order_data) if isinstance(order_data, dict) else order_data
+            logging.error("LIVE BUY FAILED | %s", error_info)
+
         return
 
+    # SIM mode
     if sim_cash < TRADE_SIZE_USD:
-        logging.info("SIM BUY SKIPPED | Not enough cash | Cash: $%.2f", sim_cash)
+        logging.info("SIM BUY BLOCKED | Not enough cash | Cash: $%.2f", sim_cash)
         return
 
     btc_bought = TRADE_SIZE_USD / current_price
@@ -160,19 +202,20 @@ def buy(current_price):
     last_trade_ts = time.time()
 
     logging.info(
-        "SIM BUY | Price: $%.2f | BTC bought: %.6f | Cash left: $%.2f | BTC holdings: %.6f | Trades today: %d",
+        "SIM BUY | Price: $%.2f | BTC bought: %.8f | Cash left: $%.2f | BTC holdings: %.8f | Trades today: %d",
         current_price, btc_bought, sim_cash, sim_btc_holdings, trade_count_today
     )
 
 
 def sell(current_price, reason):
-    global sim_cash, sim_btc_holdings, last_buy_price, realized_pnl_today, last_trade_ts
+    global sim_cash, sim_btc_holdings
+    global last_buy_price, realized_pnl_today, last_trade_ts
 
     if LIVE_TRADING:
-        usd_available, btc_available = get_live_balances()
+        _, btc_available = get_live_balances()
 
         if btc_available <= 0:
-            logging.info("LIVE SELL SKIPPED | No BTC available")
+            logging.info("LIVE SELL BLOCKED | No BTC available")
             return
 
         pnl = 0.0
@@ -188,20 +231,27 @@ def sell(current_price, reason):
         order_data = normalize_response(order)
         logging.info("LIVE SELL RESPONSE | %s", order_data)
 
-        if order_data["success"]:
+        success = False
+        if isinstance(order_data, dict):
+            success = bool(order_data.get("success"))
+
+        if success:
             realized_pnl_today += pnl
             last_buy_price = None
             last_trade_ts = time.time()
 
             usd_after, btc_after = get_live_balances()
             logging.info(
-                "LIVE SELL | Reason: %s | Price: $%.2f | Est PnL: $%.2f | Daily realized PnL: $%.2f | USD available: $%.2f | BTC available: %.6f",
+                "LIVE SELL | Reason: %s | Price: $%.2f | Est PnL: $%.2f | Daily realized PnL: $%.2f | USD available: $%.2f | BTC available: %.8f",
                 reason, current_price, pnl, realized_pnl_today, usd_after, btc_after
             )
         else:
-            logging.error("LIVE SELL FAILED | %s", order_data["error_response"])
+            error_info = order_data.get("error_response", order_data) if isinstance(order_data, dict) else order_data
+            logging.error("LIVE SELL FAILED | %s", error_info)
+
         return
 
+    # SIM mode
     if sim_btc_holdings <= 0:
         return
 
@@ -240,22 +290,19 @@ def main():
             reset_daily_counters_if_needed()
             price = get_price()
 
-            if not first_buy_done:
-                if LIVE_TRADING:
-                    usd_available, btc_available = get_live_balances()
+            if LIVE_TRADING:
+                usd_available, btc_available = get_live_balances()
+
+                # First entry only if flat and enough USD available
+                if not first_buy_done:
                     if btc_available <= 0 and usd_available >= TRADE_SIZE_USD:
                         buy(price)
                         first_buy_done = True
                     elif btc_available > 0:
-                        first_buy_done = True
-                else:
-                    if sim_btc_holdings == 0.0:
-                        buy(price)
+                        # Already holding something, do not force a second first buy
                         first_buy_done = True
 
-            if LIVE_TRADING:
-                usd_available, btc_available = get_live_balances()
-
+                # Exit logic
                 if btc_available > 0 and last_buy_price is not None:
                     gain_pct = (price - last_buy_price) / last_buy_price
                     loss_pct = (last_buy_price - price) / last_buy_price
@@ -265,12 +312,17 @@ def main():
                     elif loss_pct >= STOP_LOSS_PCT:
                         sell(price, "stop loss")
 
+                usd_available, btc_available = get_live_balances()
                 logging.info(
-                    "BTC Price: $%.2f | USD available: $%.2f | BTC available: %.6f | Portfolio: $%.2f | Daily PnL: $%.2f",
+                    "BTC Price: $%.2f | USD available: $%.2f | BTC available: %.8f | Portfolio: $%.2f | Daily PnL: $%.2f",
                     price, usd_available, btc_available, portfolio_value(price), realized_pnl_today
                 )
 
             else:
+                if not first_buy_done and sim_btc_holdings == 0.0:
+                    buy(price)
+                    first_buy_done = True
+
                 if sim_btc_holdings > 0 and last_buy_price is not None:
                     gain_pct = (price - last_buy_price) / last_buy_price
                     loss_pct = (last_buy_price - price) / last_buy_price
@@ -281,7 +333,7 @@ def main():
                         sell(price, "stop loss")
 
                 logging.info(
-                    "BTC Price: $%.2f | Cash: $%.2f | BTC: %.6f | Portfolio: $%.2f | Daily PnL: $%.2f",
+                    "BTC Price: $%.2f | Cash: $%.2f | BTC: %.8f | Portfolio: $%.2f | Daily PnL: $%.2f",
                     price, sim_cash, sim_btc_holdings, portfolio_value(price), realized_pnl_today
                 )
 
